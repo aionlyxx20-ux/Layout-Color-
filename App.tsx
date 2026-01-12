@@ -14,47 +14,36 @@ const App: React.FC = () => {
   const [selectedSize, setSelectedSize] = useState<ImageSize>("1K");
   const [styleStrength, setStyleStrength] = useState<number>(80);
   const [aspectRatio, setAspectRatio] = useState<"1:1" | "3:4" | "4:3" | "9:16" | "16:9">("1:1");
+  
+  // API Key 管理相关状态
+  const [showKeyModal, setShowKeyModal] = useState<boolean>(false);
+  const [inputKey, setInputKey] = useState<string>("");
   const [hasKey, setHasKey] = useState<boolean>(false);
 
-  // 强化检测逻辑：针对部署环境优化 window 对象监听
+  // 初始化检查本地存储的 Key
   useEffect(() => {
-    const checkKeyStatus = async () => {
-      // 检查 aistudio 插件是否注入成功
-      const aiStudio = (window as any).aistudio;
-      if (aiStudio && typeof aiStudio.hasSelectedApiKey === 'function') {
-        const isSelected = await aiStudio.hasSelectedApiKey();
-        if (isSelected !== hasKey) setHasKey(isSelected);
-      } else {
-        // 兜底检查环境变量
-        const envKeyExists = !!process.env.API_KEY;
-        if (envKeyExists !== hasKey) setHasKey(envKeyExists);
-      }
-    };
-    
-    checkKeyStatus();
-    // 缩短轮询间隔，确保用户点击后 UI 响应极速
-    const interval = setInterval(checkKeyStatus, 1000);
-    return () => clearInterval(interval);
-  }, [hasKey]);
+    const savedKey = localStorage.getItem('CAD_RENDER_API_KEY');
+    if (savedKey && savedKey.length > 20) {
+      setHasKey(true);
+      setInputKey(savedKey);
+    }
+  }, []);
 
   const refInputRef = useRef<HTMLInputElement>(null);
   const lineartInputRef = useRef<HTMLInputElement>(null);
 
-  const handleSelectKey = async () => {
-    const aiStudio = (window as any).aistudio;
-    // 解决部署环境下 openSelectKey 的调用链路问题
-    if (aiStudio && typeof aiStudio.openSelectKey === 'function') {
-      try {
-        await aiStudio.openSelectKey();
-        // 触发后立即同步状态，避免 race condition
-        setHasKey(true);
-      } catch (err) {
-        console.error("Key selector trigger failed:", err);
-      }
-    } else {
-      // 如果是在 Vercel 预览或独立访问，指导用户如何配置
-      alert("请点击界面右上角的 AI 图标或登录按钮进行 API 授权。如果弹窗未弹出，请检查浏览器是否拦截了弹出窗口。");
+  const saveApiKey = () => {
+    if (inputKey.trim().length < 10) {
+      alert("请输入有效的 API Key");
+      return;
     }
+    localStorage.setItem('CAD_RENDER_API_KEY', inputKey.trim());
+    setHasKey(true);
+    setShowKeyModal(false);
+  };
+
+  const getActiveApiKey = () => {
+    return localStorage.getItem('CAD_RENDER_API_KEY') || process.env.API_KEY || "";
   };
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>, type: 'ref' | 'lineart') => {
@@ -87,20 +76,21 @@ const App: React.FC = () => {
 
   const analyzeStyle = async () => {
     if (!refImage) return;
-    if (!hasKey) {
-      await handleSelectKey();
+    const apiKey = getActiveApiKey();
+    if (!apiKey) {
+      setShowKeyModal(true);
       return;
     }
 
     setStatus('analyzing');
     try {
-      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+      const ai = new GoogleGenAI({ apiKey });
       const response = await ai.models.generateContent({
         model: 'gemini-3-flash-preview',
         contents: [{
           parts: [
             { inlineData: { data: refImage.split(',')[1], mimeType: 'image/jpeg' } },
-            { text: "Extract architectural visual DNA: Color scheme, light intensity, and texture feel." }
+            { text: "Detailed architectural color analysis: Extract palette, materials, and lighting mood." }
           ]
         }],
         config: {
@@ -110,11 +100,12 @@ const App: React.FC = () => {
       setStyleDesc(response.text || "");
     } catch (err: any) {
       console.error(err);
-      if (err.message?.includes("not found") || err.message?.includes("404")) {
+      if (err.message?.includes("API_KEY_INVALID") || err.message?.includes("403")) {
         setHasKey(false);
-        alert("API Key 效验失败。请点击右上角‘重新配置’并选择有效的付费 Key。");
+        alert("API Key 效验失败，请检查是否输入正确且关联了付费项目。");
+        setShowKeyModal(true);
       } else {
-        alert("解析受阻，请确保网络通畅或检查 Key 额度。");
+        alert("解析受阻，请检查网络连接或 API 额度。");
       }
     } finally {
       setStatus('idle');
@@ -123,19 +114,20 @@ const App: React.FC = () => {
 
   const renderLayout = async () => {
     if (!lineartImage || !styleDesc) return;
-    if (!hasKey) {
-      await handleSelectKey();
+    const apiKey = getActiveApiKey();
+    if (!apiKey) {
+      setShowKeyModal(true);
       return;
     }
 
     setStatus('rendering');
     try {
-      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+      const ai = new GoogleGenAI({ apiKey });
       const prompt = `
         TASK: ARCHITECTURAL PLAN COLORIZATION
-        STYLE: ${styleDesc}
+        STYLE REFERENCE: ${styleDesc}
         STRENGTH: ${styleStrength}%
-        GEOMETRIC LOCK: DO NOT change any CAD lines. 100% topology preservation.
+        CONSTRAINT: TOPOLOGY LOCK. Preserving every line of the CAD input with absolute precision.
       `;
 
       const response = await ai.models.generateContent({
@@ -160,12 +152,7 @@ const App: React.FC = () => {
       }
     } catch (err: any) {
       console.error(err);
-      if (err.message?.includes("not found")) {
-        setHasKey(false);
-        alert("API Key 已失效。请重新配置。");
-      } else {
-        alert("渲染失败，请检查图片或 API 状态。");
-      }
+      alert(`生成失败: ${err.message || '未知错误'}`);
     } finally {
       setStatus('idle');
     }
@@ -173,6 +160,47 @@ const App: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-[#0d0d0f] text-slate-400 font-sans selection:bg-blue-600/30">
+      {/* API Key Modal */}
+      {showKeyModal && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-6 backdrop-blur-md bg-black/60">
+          <div className="bg-[#1a1a1e] border border-white/10 rounded-[2.5rem] p-10 max-w-md w-full shadow-2xl animate-in fade-in zoom-in duration-300">
+            <h3 className="text-white text-xl font-bold tracking-tight mb-2">配置 API 秘钥</h3>
+            <p className="text-slate-500 text-xs mb-8 leading-relaxed">请输入您的 Google Gemini API Key。该秘钥将仅存储在您的浏览器本地，用于驱动高精度图像生成引擎。</p>
+            
+            <div className="space-y-6">
+              <div className="relative group">
+                <input 
+                  type="password" 
+                  value={inputKey}
+                  onChange={(e) => setInputKey(e.target.value)}
+                  placeholder="AIzaSy..." 
+                  className="w-full bg-black/40 border border-white/5 rounded-2xl px-6 py-4 text-white text-sm focus:outline-none focus:border-blue-500/50 transition-all placeholder:opacity-20"
+                />
+                <div className="absolute inset-0 rounded-2xl bg-blue-500/5 opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity"></div>
+              </div>
+              
+              <div className="flex gap-4">
+                <button 
+                  onClick={() => setShowKeyModal(false)}
+                  className="flex-1 py-4 bg-white/5 hover:bg-white/10 text-white text-[10px] font-black uppercase tracking-widest rounded-2xl transition-all"
+                >
+                  取消
+                </button>
+                <button 
+                  onClick={saveApiKey}
+                  className="flex-[2] py-4 bg-blue-600 hover:bg-blue-500 text-white text-[10px] font-black uppercase tracking-widest rounded-2xl transition-all shadow-lg shadow-blue-600/20"
+                >
+                  确认保存
+                </button>
+              </div>
+              <p className="text-[9px] text-center text-slate-600 uppercase tracking-tighter">
+                尚未拥有 Key？<a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noreferrer" className="text-blue-500 hover:underline">去 AI Studio 免费获取</a>
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
       <nav className="border-b border-white/5 bg-black/40 backdrop-blur-xl sticky top-0 z-50 px-10 py-5 flex justify-between items-center">
         <div className="flex items-center gap-6">
           <div className="flex flex-col">
@@ -190,10 +218,10 @@ const App: React.FC = () => {
           </div>
           <div className="flex flex-col items-end">
             <button 
-              onClick={handleSelectKey} 
+              onClick={() => setShowKeyModal(true)} 
               className="px-5 py-2 bg-white/5 hover:bg-white/10 rounded-full text-[10px] font-black uppercase tracking-widest transition-all border border-white/10"
             >
-              {hasKey ? '重新配置' : '配置付费 API 秘钥'}
+              {hasKey ? '更改 API 秘钥' : '配置付费 API 秘钥'}
             </button>
             <a href="https://ai.google.dev/gemini-api/docs/billing" target="_blank" rel="noreferrer" className="text-[7px] text-slate-600 mt-1 hover:text-blue-500 transition-colors uppercase tracking-tighter">
               需要关联付费项目 (Billing Required)
@@ -203,6 +231,7 @@ const App: React.FC = () => {
       </nav>
 
       <main className="max-w-[1800px] mx-auto p-10 grid grid-cols-1 lg:grid-cols-3 gap-10 h-[calc(100vh-140px)]">
+        {/* Step 1: Style Reference */}
         <section className="bg-[#16161a] rounded-[2rem] border border-white/5 p-8 flex flex-col shadow-2xl overflow-hidden group">
           <header className="flex justify-between items-center mb-6">
             <h2 className="text-[10px] font-black uppercase tracking-[0.4em] text-blue-500">01. 风格参考 / Reference</h2>
@@ -246,6 +275,7 @@ const App: React.FC = () => {
           </div>
         </section>
 
+        {/* Step 2: CAD Lineart */}
         <section className="bg-[#16161a] rounded-[2rem] border border-white/5 p-8 flex flex-col shadow-2xl">
           <header className="flex justify-between items-center mb-6">
             <h2 className="text-[10px] font-black uppercase tracking-[0.4em] text-emerald-500">02. CAD 线稿 / Structural</h2>
@@ -295,11 +325,12 @@ const App: React.FC = () => {
               disabled={status !== 'idle' || !lineartImage || !styleDesc}
               className="w-full py-5 bg-white hover:bg-emerald-400 text-black text-[12px] font-black uppercase tracking-[0.5em] rounded-3xl transition-all shadow-xl shadow-white/5 active:scale-95 disabled:opacity-5 disabled:grayscale"
             >
-              {status === 'rendering' ? '高精度合成中...' : '生成彩色布局图'}
+              {status === 'rendering' ? '引擎运算中...' : '生成彩色布局图'}
             </button>
           </div>
         </section>
 
+        {/* Step 3: Result */}
         <section className="bg-[#16161a] rounded-[2rem] border border-white/5 p-8 flex flex-col shadow-2xl relative overflow-hidden">
           <header className="flex justify-between items-center mb-6 relative z-10">
             <h2 className="text-[10px] font-black uppercase tracking-[0.4em] text-purple-500">03. 渲染结果 / Output</h2>
@@ -339,7 +370,7 @@ const App: React.FC = () => {
 
       <footer className="px-10 py-6 flex justify-between items-center text-[8px] font-bold text-slate-700 uppercase tracking-[0.3em]">
         <div className="flex gap-12">
-          <span className="flex items-center gap-2 italic">Architecture Visual Studio v5.3</span>
+          <span className="flex items-center gap-2 italic">Architecture Visual Studio v5.4</span>
           <span className="flex items-center gap-2"><div className="w-1 h-1 bg-emerald-500 rounded-full"></div>Topology Consistency: 100%</span>
         </div>
         <div>All Systems Nominal · Processing on Gemini Vision Engine</div>
@@ -350,7 +381,8 @@ const App: React.FC = () => {
           -webkit-appearance: none; height: 14px; width: 14px; border-radius: 50%; background: #10b981; border: 3px solid #16161a; cursor: pointer;
         }
         @keyframes fade-in { from { opacity: 0; transform: scale(0.98); } to { opacity: 1; transform: scale(1); } }
-        .animate-in { animation: fade-in 1s ease-out forwards; }
+        @keyframes zoom-in { from { transform: scale(0.95); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+        .animate-in { animation: zoom-in 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
       `}</style>
     </div>
   );
