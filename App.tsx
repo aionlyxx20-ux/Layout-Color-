@@ -15,6 +15,11 @@ const App: React.FC = () => {
   const [styleStrength, setStyleStrength] = useState<number>(80);
   const [aspectRatio, setAspectRatio] = useState<"1:1" | "3:4" | "4:3" | "9:16" | "16:9">("1:1");
   
+  // 针对色彩渐变能力和纹理变化不敏感进行的专项深度优化
+  const [analysisPrompt, setAnalysisPrompt] = useState<string>(
+    "深度解构此彩平图：1.色彩渐变逻辑（精准提取明度与饱和度的渐变规律、色彩过渡的曲线斜率及边缘羽化特征）；2.纹理动态变化（捕捉材质纹理在光影流转下的疏密变化、肌理的颗粒度缩放及表面微起伏感）；3.色系分布比例与光影统一性；4.材质反射、磨砂感与渐变色块的交互规律。"
+  );
+
   // API Key 管理相关状态
   const [showKeyModal, setShowKeyModal] = useState<boolean>(false);
   const [inputKey, setInputKey] = useState<string>("");
@@ -90,11 +95,12 @@ const App: React.FC = () => {
         contents: [{
           parts: [
             { inlineData: { data: refImage.split(',')[1], mimeType: 'image/jpeg' } },
-            { text: "Detailed architectural color analysis: Extract palette, materials, and lighting mood." }
+            { text: analysisPrompt }
           ]
         }],
         config: {
-          thinkingConfig: { thinkingBudget: 2500 }
+          thinkingConfig: { thinkingBudget: 8000 },
+          systemInstruction: "你是一位精通视觉生理学与材质仿生的可视化专家。请深度聚焦于色彩的渐变斜率(Gradient Slope)、纹理的拓扑分布(Texture Topology)以及材质表面的光敏变化。描述必须包含对微观纹理细节和无缝色彩过渡的定性定量分析。"
         }
       });
       setStyleDesc(response.text || "");
@@ -102,10 +108,10 @@ const App: React.FC = () => {
       console.error(err);
       if (err.message?.includes("API_KEY_INVALID") || err.message?.includes("403")) {
         setHasKey(false);
-        alert("API Key 效验失败，请检查是否输入正确且关联了付费项目。");
+        alert("API Key 效验失败。");
         setShowKeyModal(true);
       } else {
-        alert("解析受阻，请检查网络连接或 API 额度。");
+        alert("解析受阻，请检查网络或 Key 状态。");
       }
     } finally {
       setStatus('idle');
@@ -124,10 +130,12 @@ const App: React.FC = () => {
     try {
       const ai = new GoogleGenAI({ apiKey });
       const prompt = `
-        TASK: ARCHITECTURAL PLAN COLORIZATION
-        STYLE REFERENCE: ${styleDesc}
-        STRENGTH: ${styleStrength}%
-        CONSTRAINT: TOPOLOGY LOCK. Preserving every line of the CAD input with absolute precision.
+        TASK: ARCHITECTURAL PLAN ULTRA-FIDELITY COLORIZATION
+        STRICT CONSTRAINT: TOPOLOGY LOCK. No line modification. 1:1 geometry preservation.
+        STYLE DNA: ${styleDesc}
+        GRADIENT MAPPING: ${styleStrength}% intensity. Apply complex color gradients (ramps) to floor surfaces, mimicking the reference lighting transitions.
+        TEXTURE DYNAMICS: Replicate micro-texture variations (e.g., stone patterns, wood fibers) from DNA to the target layout. Focus on the interplay between texture detail and color gradient to ensure 3D depth.
+        CORE REQUIREMENT: Seamless blending of colors and high-definition texture migration.
       `;
 
       const response = await ai.models.generateContent({
@@ -152,7 +160,7 @@ const App: React.FC = () => {
       }
     } catch (err: any) {
       console.error(err);
-      alert(`生成失败: ${err.message || '未知错误'}`);
+      alert(`生成失败: ${err.message || '渲染引擎响应超时'}`);
     } finally {
       setStatus('idle');
     }
@@ -165,7 +173,7 @@ const App: React.FC = () => {
         <div className="fixed inset-0 z-[100] flex items-center justify-center p-6 backdrop-blur-md bg-black/60">
           <div className="bg-[#1a1a1e] border border-white/10 rounded-[2.5rem] p-10 max-w-md w-full shadow-2xl animate-in fade-in zoom-in duration-300">
             <h3 className="text-white text-xl font-bold tracking-tight mb-2">配置 API 秘钥</h3>
-            <p className="text-slate-500 text-xs mb-8 leading-relaxed">请输入您的 Google Gemini API Key。该秘钥将仅存储在您的浏览器本地，用于驱动高精度图像生成引擎。</p>
+            <p className="text-slate-500 text-xs mb-8 leading-relaxed">请输入您的 Google Gemini API Key。该秘钥将仅存储在您的浏览器本地。</p>
             
             <div className="space-y-6">
               <div className="relative group">
@@ -254,17 +262,28 @@ const App: React.FC = () => {
           </div>
 
           <div className="space-y-4">
-            <div className="bg-black/20 rounded-2xl p-5 border border-white/5 min-h-[120px]">
-              <span className="text-[9px] font-black text-slate-600 uppercase tracking-widest block mb-2">风格基因序列 / Style DNA:</span>
+            <div className="bg-black/20 rounded-2xl p-5 border border-white/5 min-h-[140px] flex flex-col">
+              <span className="text-[9px] font-black text-slate-600 uppercase tracking-widest block mb-2">解析指令 / Prompt:</span>
+              <textarea 
+                value={analysisPrompt}
+                onChange={(e) => setAnalysisPrompt(e.target.value)}
+                className="flex-1 bg-transparent border-none text-[10px] text-slate-400 leading-relaxed resize-none focus:ring-0 scrollbar-hide font-medium"
+                placeholder="输入解析指令..."
+              />
+            </div>
+            
+            <div className="bg-black/30 rounded-2xl p-5 border border-white/5 min-h-[80px]">
+              <span className="text-[9px] font-black text-blue-500/60 uppercase tracking-widest block mb-2">风格基因 / Style DNA:</span>
               {styleDesc ? (
-                <p className="text-[10px] text-slate-400 leading-relaxed italic">{styleDesc}</p>
+                <p className="text-[10px] text-slate-400 leading-relaxed italic line-clamp-4">{styleDesc}</p>
               ) : (
-                <div className="flex flex-col items-center justify-center pt-4 opacity-30">
-                  <div className="w-full h-1 bg-white/5 rounded-full overflow-hidden mb-2"></div>
-                  <div className="w-2/3 h-1 bg-white/5 rounded-full overflow-hidden"></div>
+                <div className="flex flex-col items-center justify-center pt-2 opacity-30">
+                  <div className="w-full h-1 bg-white/5 rounded-full mb-2"></div>
+                  <div className="w-2/3 h-1 bg-white/5 rounded-full"></div>
                 </div>
               )}
             </div>
+
             <button 
               onClick={analyzeStyle}
               disabled={!refImage || status === 'analyzing'}
@@ -353,7 +372,7 @@ const App: React.FC = () => {
                   <div className="absolute inset-4 border-[1px] border-purple-500/20 rounded-full animate-pulse"></div>
                   <div className="text-[10px] font-black uppercase tracking-[0.5em] text-white">Rendering</div>
                 </div>
-                <p className="mt-8 text-slate-500 text-[9px] uppercase tracking-widest font-medium">线稿像素锁定中 · 物理材质计算中</p>
+                <p className="mt-8 text-slate-500 text-[9px] uppercase tracking-widest font-medium text-center px-4">梯度色彩映射中 · 材质动态迁移中</p>
               </div>
             )}
             {resultImage ? (
@@ -370,7 +389,7 @@ const App: React.FC = () => {
 
       <footer className="px-10 py-6 flex justify-between items-center text-[8px] font-bold text-slate-700 uppercase tracking-[0.3em]">
         <div className="flex gap-12">
-          <span className="flex items-center gap-2 italic">Architecture Visual Studio v5.4</span>
+          <span className="flex items-center gap-2 italic">Architecture Visual Studio v5.6</span>
           <span className="flex items-center gap-2"><div className="w-1 h-1 bg-emerald-500 rounded-full"></div>Topology Consistency: 100%</span>
         </div>
         <div>All Systems Nominal · Processing on Gemini Vision Engine</div>
@@ -383,6 +402,8 @@ const App: React.FC = () => {
         @keyframes fade-in { from { opacity: 0; transform: scale(0.98); } to { opacity: 1; transform: scale(1); } }
         @keyframes zoom-in { from { transform: scale(0.95); opacity: 0; } to { transform: scale(1); opacity: 1; } }
         .animate-in { animation: zoom-in 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
+        .scrollbar-hide::-webkit-scrollbar { display: none; }
+        .scrollbar-hide { -ms-overflow-style: none; scrollbar-width: none; }
       `}</style>
     </div>
   );
