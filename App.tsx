@@ -18,25 +18,28 @@ const App: React.FC = () => {
   const refInputRef = useRef<HTMLInputElement>(null);
   const lineartInputRef = useRef<HTMLInputElement>(null);
 
-  // 处理 API 密钥选择
+  // 严格执行 API 密钥选择弹窗
   const handleSelectKey = async () => {
     try {
-      // @ts-ignore
-      await window.aistudio.openSelectKey();
-      console.log("API Key interaction completed.");
+      // 显式检查并调用全局接口
+      if (typeof (window as any).aistudio?.openSelectKey === 'function') {
+        await (window as any).aistudio.openSelectKey();
+      } else {
+        console.error("AI Studio API Key selector not available in this context.");
+      }
     } catch (err) {
-      console.error("Failed to open API Key dialog", err);
+      console.error("Failed to open API Key dialog:", err);
     }
   };
 
-  // 初始检查，如果没选 Key 则引导选择，但不阻塞 UI
+  // 启动时检查，如果没有密钥则静默提示一次
   useEffect(() => {
     const initCheck = async () => {
-      // @ts-ignore
-      const hasKey = await window.aistudio.hasSelectedApiKey();
-      if (!hasKey) {
-        // @ts-ignore
-        window.aistudio.openSelectKey();
+      if (typeof (window as any).aistudio?.hasSelectedApiKey === 'function') {
+        const hasKey = await (window as any).aistudio.hasSelectedApiKey();
+        if (!hasKey && typeof (window as any).aistudio?.openSelectKey === 'function') {
+          (window as any).aistudio.openSelectKey();
+        }
       }
     };
     initCheck();
@@ -233,7 +236,13 @@ const App: React.FC = () => {
               <button key={s} onClick={() => setSelectedSize(s)} className={`px-6 py-2 rounded-full text-[9px] font-black transition-all border ${selectedSize === s ? 'bg-white text-black border-white shadow-lg' : 'text-white/20 border-white/5 hover:border-white/20'}`}>{s} RENDER</button>
             ))}
           </div>
-          <button onClick={handleSelectKey} className="px-6 py-2 bg-emerald-500/10 text-emerald-500 border border-emerald-500/20 rounded-full text-[9px] font-black hover:bg-emerald-500 hover:text-white transition-all uppercase tracking-widest">引擎管理</button>
+          <button 
+            type="button"
+            onClick={handleSelectKey} 
+            className="px-6 py-2 bg-emerald-500/10 text-emerald-500 border border-emerald-500/20 rounded-full text-[9px] font-black hover:bg-emerald-500 hover:text-white transition-all uppercase tracking-widest cursor-pointer z-50"
+          >
+            引擎管理
+          </button>
         </nav>
 
         <div className="w-full h-full max-w-7xl rounded-[4rem] border border-white/[0.03] bg-[#050505] flex items-center justify-center overflow-hidden relative shadow-[0_0_120px_rgba(0,0,0,0.6)] group">
