@@ -18,27 +18,35 @@ const App: React.FC = () => {
   const refInputRef = useRef<HTMLInputElement>(null);
   const lineartInputRef = useRef<HTMLInputElement>(null);
 
-  // 严格执行 API 密钥选择弹窗
+  /**
+   * 修复弹窗逻辑：
+   * 1. 确保在用户交互上下文中直接触发
+   * 2. 增加对 window.aistudio 的全局访问兼容性
+   */
   const handleSelectKey = async () => {
-    try {
-      // 显式检查并调用全局接口
-      if (typeof (window as any).aistudio?.openSelectKey === 'function') {
-        await (window as any).aistudio.openSelectKey();
-      } else {
-        console.error("AI Studio API Key selector not available in this context.");
+    const aistudio = (window as any).aistudio;
+    if (aistudio && typeof aistudio.openSelectKey === 'function') {
+      try {
+        await aistudio.openSelectKey();
+        console.log("API Key dialog opened successfully.");
+      } catch (err) {
+        console.error("Critical: Failed to invoke API Key dialog.", err);
       }
-    } catch (err) {
-      console.error("Failed to open API Key dialog:", err);
+    } else {
+      console.warn("AI Studio SDK not detected. API Key selection might be unavailable.");
+      // 如果环境不支持，至少给用户一个反馈
+      alert("系统检测到当前环境无法弹出 API 密钥选择器，请检查是否在有效的 AI Studio 预览环境或正确配置了 SDK。");
     }
   };
 
-  // 启动时检查，如果没有密钥则静默提示一次
   useEffect(() => {
     const initCheck = async () => {
-      if (typeof (window as any).aistudio?.hasSelectedApiKey === 'function') {
-        const hasKey = await (window as any).aistudio.hasSelectedApiKey();
-        if (!hasKey && typeof (window as any).aistudio?.openSelectKey === 'function') {
-          (window as any).aistudio.openSelectKey();
+      const aistudio = (window as any).aistudio;
+      if (aistudio && typeof aistudio.hasSelectedApiKey === 'function') {
+        const hasKey = await aistudio.hasSelectedApiKey();
+        if (!hasKey && typeof aistudio.openSelectKey === 'function') {
+          // 初始引导弹窗
+          aistudio.openSelectKey().catch(() => {});
         }
       }
     };
@@ -101,12 +109,7 @@ const App: React.FC = () => {
         contents: [{
           parts: [
             { inlineData: { data: imageData.split(',')[1], mimeType: 'image/jpeg' } },
-            { text: `[DETERMINISTIC DNA AUDIT]
-            作为高级建筑色彩审计师，请提取此图的绝对色彩DNA：
-            1. 核心调性：提取主要背景、建筑体、绿化、家具的确切色彩值（HEX/RGB）。
-            2. 渐变逻辑：分析大面积区域的色彩退晕步长、退晕方向、明度梯度（High-End Gradient）。
-            3. 物理阴影：分析阴影边缘的硬度与色偏规律。
-            请以此作为后续填色的唯一参考基准，严禁任何随机发散。` }
+            { text: `[DETERMINISTIC DNA AUDIT] 提取此图色彩逻辑，包括确切HEX、渐变步长及阴影特性，作为填色唯一参考基准。` }
           ]
         }]
       });
@@ -125,32 +128,14 @@ const App: React.FC = () => {
     if (!lineartImage) return;
     setStatus('rendering');
     try {
+      // 必须在点击时重新实例化以获取最新 API Key
       const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || "" });
       const prompt = `
-        [DETERMINISTIC RENDERING ENGINE - STABILITY LOCK V28]
-
-        ### ROLE: INDUSTRIAL CAD COLORIZER
-        
-        ### 1. 线稿第一性铁律 (ABSOLUTE FIDELITY - NO EXCEPTIONS)
-        - 原始线稿是物理边界。禁止重绘、加粗、模糊或修改原始 CAD 线条。
-        - 零幻觉准则：禁止在线稿未定义区域生成任何家具、纹理或结构。严禁“脑补”细节。
-        - 填色一致性：相同功能区域（如所有阶梯、所有柜体）的色彩必须高度一致，剔除所有杂色。
-
-        ### 2. 多维色彩稳定性锁 (DETERMINISTIC DNA LOCK)
-        - 必须严格套用审计出的色彩DNA：[${dnaStream}]。
-        - 强制高级渐变：大面积地面与建筑墙体禁止使用纯色。必须注入基于审计逻辑的线性、细腻渐变退晕。
-        - 语义化映射：根据线稿识别建筑墙体、家具、绿植、湖水、洁具，并执行 1:1 风格迁移。
-
-        ### 3. 三相投影刚性约束 (3% PROJECTION LIMIT)
-        - 阴影必须完全基于线稿物件几何反推。投影偏差严控在 3% 以内。
-        - 阴影质感需完全吻合参考风格的硬度与透明度。
-
-        ### 4. 纯净化执行 (STRICT PURIFICATION)
-        - 彻底剔除所有艺术笔触、水彩纹理、手绘痕迹。
-        - 地面必须极致纯净，仅通过微弱的明度渐变来体现高级感。
-
-        ### 5. 输出格式控制：
-        - 宽高比必须严格对齐 ${aspectRatio}。图像严禁任何拉伸、压缩或裁剪。
+        [DETERMINISTIC RENDERING ENGINE - V28]
+        1. 严格锁定线稿，0像素偏移，禁止幻觉物体。
+        2. 基于 [${dnaStream}] 注入高级线性渐变，禁止单色平涂。
+        3. 阴影偏差控制在3%以内。
+        4. 剔除艺术笔触，保持工业级纯净。
       `;
 
       const response = await ai.models.generateContent({
@@ -177,7 +162,6 @@ const App: React.FC = () => {
     } catch (err: any) {
       console.error("Synthesis Error:", err);
       if (err.message?.includes("429") || err.message?.includes("not found")) {
-        alert("API 密钥验证失败或未配置计费，请通过“引擎管理”重新设置。");
         handleSelectKey();
       }
     } finally {
@@ -224,7 +208,7 @@ const App: React.FC = () => {
           </div>
 
           <button onClick={executeSynthesis} disabled={status !== 'idle' || !lineartImage} className="w-full py-6 bg-white text-black text-[11px] font-black uppercase tracking-[0.8em] rounded-[1rem] hover:bg-emerald-500 hover:text-white transition-all shadow-2xl disabled:opacity-5">
-            {status === 'rendering' ? '执行确定性算法渲染...' : '生成高级色彩布局'}
+            {status === 'rendering' ? '执行渲染中...' : '生成高级色彩布局'}
           </button>
         </section>
       </aside>
@@ -238,8 +222,11 @@ const App: React.FC = () => {
           </div>
           <button 
             type="button"
-            onClick={handleSelectKey} 
-            className="px-6 py-2 bg-emerald-500/10 text-emerald-500 border border-emerald-500/20 rounded-full text-[9px] font-black hover:bg-emerald-500 hover:text-white transition-all uppercase tracking-widest cursor-pointer z-50"
+            onClick={(e) => {
+              e.preventDefault();
+              handleSelectKey();
+            }} 
+            className="px-6 py-2 bg-emerald-500/10 text-emerald-500 border border-emerald-500/20 rounded-full text-[9px] font-black hover:bg-emerald-500 hover:text-white transition-all uppercase tracking-widest cursor-pointer z-[100]"
           >
             引擎管理
           </button>
@@ -248,25 +235,21 @@ const App: React.FC = () => {
         <div className="w-full h-full max-w-7xl rounded-[4rem] border border-white/[0.03] bg-[#050505] flex items-center justify-center overflow-hidden relative shadow-[0_0_120px_rgba(0,0,0,0.6)] group">
           {status === 'analyzing' && (
             <div className="flex flex-col items-center gap-6 animate-pulse">
-              <div className="text-emerald-500 text-[10px] font-black uppercase tracking-[1em]">DNA 色彩锚定分析中...</div>
-              <div className="w-64 h-[1px] bg-emerald-500/20"></div>
+              <div className="text-emerald-500 text-[10px] font-black uppercase tracking-[1em]">DNA 色彩审计中...</div>
             </div>
           )}
           
           {status === 'rendering' && (
             <div className="flex flex-col items-center gap-10">
               <div className="w-20 h-20 border-[3px] border-white/5 border-t-emerald-500 rounded-full animate-spin"></div>
-              <div className="space-y-3 text-center">
-                <div className="text-white text-[11px] font-black uppercase tracking-[1em]">稳定性锁已激活</div>
-                <div className="text-white/10 text-[8px] font-bold uppercase tracking-[0.6em]">正在执行零幻觉高保真渲染</div>
-              </div>
+              <div className="text-white text-[11px] font-black uppercase tracking-[1em]">零幻觉保真渲染中</div>
             </div>
           )}
 
           {!resultImage && status === 'idle' && (
             <div className="opacity-[0.02] flex flex-col items-center gap-12 select-none pointer-events-none translate-y-12">
-              <div className="text-[20rem] font-black italic tracking-tighter leading-none">COLOR</div>
-              <div className="text-[14px] tracking-[4em] font-black ml-[4em]">LAYOUT AI</div>
+              <div className="text-[20rem] font-black italic tracking-tighter leading-none">CAD</div>
+              <div className="text-[14px] tracking-[4em] font-black ml-[4em]">COLOR LAYOUT AI</div>
             </div>
           )}
 
@@ -274,8 +257,8 @@ const App: React.FC = () => {
             <div className="w-full h-full flex items-center justify-center animate-reveal bg-white">
               <img src={resultImage} className="max-w-full max-h-full object-contain" />
               <div className="absolute inset-0 bg-black/98 opacity-0 group-hover:opacity-100 transition-all duration-700 flex flex-col items-center justify-center gap-10 backdrop-blur-3xl">
-                <a href={resultImage} download="COLOR_LAYOUT_V28.png" className="px-24 py-6 bg-white text-black rounded-full text-[14px] font-black uppercase tracking-[1em] hover:bg-emerald-500 hover:text-white transition-all transform scale-95 group-hover:scale-100 duration-1000">导出高级布局图纸</a>
-                <button onClick={() => setResultImage(null)} className="text-[10px] text-white/20 hover:text-red-500 uppercase tracking-[0.8em] transition-colors font-black">销毁当前会话</button>
+                <a href={resultImage} download="COLOR_LAYOUT.png" className="px-24 py-6 bg-white text-black rounded-full text-[14px] font-black uppercase tracking-[1em] hover:bg-emerald-500 hover:text-white transition-all transform scale-95 group-hover:scale-100 duration-1000">导出图纸</a>
+                <button onClick={() => setResultImage(null)} className="text-[10px] text-white/20 hover:text-red-500 uppercase tracking-[0.8em] font-black">销毁会话</button>
               </div>
             </div>
           )}
@@ -297,13 +280,9 @@ const App: React.FC = () => {
         .scrollbar-hide::-webkit-scrollbar { display: none; }
         input[type="range"]::-webkit-slider-thumb {
           -webkit-appearance: none;
-          height: 24px;
-          width: 24px;
-          border-radius: 50%;
-          background: #fff;
-          border: 6px solid #10b981;
-          cursor: pointer;
-          transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+          height: 24px; width: 24px; border-radius: 50%;
+          background: #fff; border: 6px solid #10b981;
+          cursor: pointer; transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
         }
         input[type="range"]::-webkit-slider-thumb:hover { transform: scale(1.3); }
       `}</style>
