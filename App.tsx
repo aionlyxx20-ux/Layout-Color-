@@ -8,134 +8,151 @@ type Status = 'idle' | 'analyzing' | 'rendering';
 const App: React.FC = () => {
   const [refImage, setRefImage] = useState<string | null>(null);
   const [lineartImage, setLineartImage] = useState<string | null>(null);
+  const [aspectRatio, setAspectRatio] = useState<string>("1:1");
   const [resultImage, setResultImage] = useState<string | null>(null);
   const [status, setStatus] = useState<Status>('idle');
-  const [styleDesc, setStyleDesc] = useState<string>("");
+  const [dnaStream, setDnaStream] = useState<string>("");
+  const [fidelity, setFidelity] = useState<number>(100);
   const [selectedSize, setSelectedSize] = useState<ImageSize>("1K");
-  const [styleStrength, setStyleStrength] = useState<number>(80);
-  const [aspectRatio, setAspectRatio] = useState<"1:1" | "3:4" | "4:3" | "9:16" | "16:9">("1:1");
-  
-  // 针对色彩渐变能力和纹理变化不敏感进行的专项深度优化
-  const [analysisPrompt, setAnalysisPrompt] = useState<string>(
-    "深度解构此彩平图：1.色彩渐变逻辑（精准提取明度与饱和度的渐变规律、色彩过渡的曲线斜率及边缘羽化特征）；2.纹理动态变化（捕捉材质纹理在光影流转下的疏密变化、肌理的颗粒度缩放及表面微起伏感）；3.色系分布比例与光影统一性；4.材质反射、磨砂感与渐变色块的交互规律。"
-  );
-
-  // API Key 管理相关状态
-  const [showKeyModal, setShowKeyModal] = useState<boolean>(false);
-  const [inputKey, setInputKey] = useState<string>("");
-  const [hasKey, setHasKey] = useState<boolean>(false);
-
-  // 初始化检查本地存储的 Key
-  useEffect(() => {
-    const savedKey = localStorage.getItem('CAD_RENDER_API_KEY');
-    if (savedKey && savedKey.length > 20) {
-      setHasKey(true);
-      setInputKey(savedKey);
-    }
-  }, []);
+  const [isKeySelected, setIsKeySelected] = useState<boolean>(false);
 
   const refInputRef = useRef<HTMLInputElement>(null);
   const lineartInputRef = useRef<HTMLInputElement>(null);
 
-  const saveApiKey = () => {
-    if (inputKey.trim().length < 10) {
-      alert("请输入有效的 API Key");
-      return;
+  // 检查 API Key 状态并强制选择
+  const checkAndSelectKey = async () => {
+    // @ts-ignore
+    const hasKey = await window.aistudio.hasSelectedApiKey();
+    if (!hasKey) {
+      // @ts-ignore
+      await window.aistudio.openSelectKey();
+      // 按照规则，触发 openSelectKey 后假定成功以避免 race condition 阻塞
+      setIsKeySelected(true);
+    } else {
+      setIsKeySelected(true);
     }
-    localStorage.setItem('CAD_RENDER_API_KEY', inputKey.trim());
-    setHasKey(true);
-    setShowKeyModal(false);
   };
 
-  const getActiveApiKey = () => {
-    return localStorage.getItem('CAD_RENDER_API_KEY') || process.env.API_KEY || "";
+  useEffect(() => {
+    checkAndSelectKey();
+  }, []);
+
+  const handleSelectKey = async () => {
+    // @ts-ignore
+    await window.aistudio.openSelectKey();
+    setIsKeySelected(true);
   };
 
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>, type: 'ref' | 'lineart') => {
+  const calculateAspectRatio = (width: number, height: number): string => {
+    const ratio = width / height;
+    if (ratio > 1.5) return "16:9";
+    if (ratio > 1.2) return "4:3";
+    if (ratio < 0.6) return "9:16";
+    if (ratio < 0.8) return "3:4";
+    return "1:1";
+  };
+
+  const processLineart = (dataUrl: string): Promise<{data: string, ratio: string}> => {
+    return new Promise((resolve) => {
+      const img = new Image();
+      img.crossOrigin = "anonymous";
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        canvas.width = img.width;
+        canvas.height = img.height;
+        const ctx = canvas.getContext('2d')!;
+        ctx.fillStyle = "#FFFFFF";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(img, 0, 0);
+        
+        const ratio = calculateAspectRatio(img.width, img.height);
+        resolve({
+          data: canvas.toDataURL('image/png'),
+          ratio: ratio
+        });
+      };
+      img.src = dataUrl;
+    });
+  };
+
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>, type: 'ref' | 'lineart') => {
     const file = e.target.files?.[0];
     if (!file) return;
-
     const reader = new FileReader();
-    reader.onload = (event) => {
+    reader.onload = async (event) => {
       const data = event.target?.result as string;
       if (type === 'ref') {
         setRefImage(data);
-        setStyleDesc("");
+        await auditNeuralDNA(data);
       } else {
-        setLineartImage(data);
+        const processed = await processLineart(data);
+        setLineartImage(processed.data);
+        setAspectRatio(processed.ratio);
         setResultImage(null);
-        const img = new Image();
-        img.src = data;
-        img.onload = () => {
-          const r = img.width / img.height;
-          if (r > 1.5) setAspectRatio("16:9");
-          else if (r > 1.2) setAspectRatio("4:3");
-          else if (r < 0.6) setAspectRatio("9:16");
-          else if (r < 0.8) setAspectRatio("3:4");
-          else setAspectRatio("1:1");
-        };
       }
     };
     reader.readAsDataURL(file);
   };
 
-  const analyzeStyle = async () => {
-    if (!refImage) return;
-    const apiKey = getActiveApiKey();
-    if (!apiKey) {
-      setShowKeyModal(true);
-      return;
-    }
-
+  const auditNeuralDNA = async (imageData: string) => {
     setStatus('analyzing');
     try {
-      const ai = new GoogleGenAI({ apiKey });
+      // 实时创建实例以确保获取最新 API Key
+      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || "" });
       const response = await ai.models.generateContent({
         model: 'gemini-3-flash-preview',
         contents: [{
           parts: [
-            { inlineData: { data: refImage.split(',')[1], mimeType: 'image/jpeg' } },
-            { text: analysisPrompt }
+            { inlineData: { data: imageData.split(',')[1], mimeType: 'image/jpeg' } },
+            { text: `[CRITICAL STYLE AUDIT - HIGH STABILITY MODE]
+            深度解析参考图并锁定核心参数，严禁偏差：
+            1. 高级渐变协议：识别大面积区域（地面/墙体）的明度变化步长与退晕方向。
+            2. 色彩DNA映射：精确记录核心色值、色彩灌溉度分布、以及各语义组件（家具/建筑/水体）的色彩归属。
+            3. 光影拓扑：分析光源主方向、阴影边缘羽化值、以及投影相对于实体的几何位置。
+            4. 纹理控制：确认其无笔触、低底噪、高平滑度的工业特性。` }
           ]
-        }],
-        config: {
-          thinkingConfig: { thinkingBudget: 8000 },
-          systemInstruction: "你是一位精通视觉生理学与材质仿生的可视化专家。请深度聚焦于色彩的渐变斜率(Gradient Slope)、纹理的拓扑分布(Texture Topology)以及材质表面的光敏变化。描述必须包含对微观纹理细节和无缝色彩过渡的定性定量分析。"
-        }
+        }]
       });
-      setStyleDesc(response.text || "");
+      setDnaStream(response.text || "");
     } catch (err: any) {
-      console.error(err);
-      if (err.message?.includes("API_KEY_INVALID") || err.message?.includes("403")) {
-        setHasKey(false);
-        alert("API Key 效验失败。");
-        setShowKeyModal(true);
-      } else {
-        alert("解析受阻，请检查网络或 Key 状态。");
+      console.error("Audit Error:", err);
+      if (err.message?.includes("Requested entity was not found")) {
+        handleSelectKey();
       }
     } finally {
       setStatus('idle');
     }
   };
 
-  const renderLayout = async () => {
-    if (!lineartImage || !styleDesc) return;
-    const apiKey = getActiveApiKey();
-    if (!apiKey) {
-      setShowKeyModal(true);
-      return;
-    }
-
+  const executeSynthesis = async () => {
+    if (!lineartImage) return;
     setStatus('rendering');
     try {
-      const ai = new GoogleGenAI({ apiKey });
+      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || "" });
+      
       const prompt = `
-        TASK: ARCHITECTURAL PLAN ULTRA-FIDELITY COLORIZATION
-        STRICT CONSTRAINT: TOPOLOGY LOCK. No line modification. 1:1 geometry preservation.
-        STYLE DNA: ${styleDesc}
-        GRADIENT MAPPING: ${styleStrength}% intensity. Apply complex color gradients (ramps) to floor surfaces, mimicking the reference lighting transitions.
-        TEXTURE DYNAMICS: Replicate micro-texture variations (e.g., stone patterns, wood fibers) from DNA to the target layout. Focus on the interplay between texture detail and color gradient to ensure 3D depth.
-        CORE REQUIREMENT: Seamless blending of colors and high-definition texture migration.
+        [COLOR LAYOUT-AI - INDUSTRIAL FIDELITY ENGINE V25]
+        
+        ### 1. 线稿第一性铁律 (ABSOLUTE LINEART PRIMACY - MANDATORY)
+        - 原始线稿是物理世界的唯一真理。严禁修改、重叠、模糊、重绘、加粗或替换任何原始 CAD 线条。
+        - 零幻觉准则 (ZERO HALLUCINATION)：严禁在线稿未定义的区域增加任何家具、物件、植物或结构。AI 禁止自行“脑补”细节。
+        - 填色逻辑一致性：线稿定义的封闭模块必须执行高度统一的填色。
+
+        ### 2. 高级渐变与色彩灌溉 (ADVANCED GRADIENT IRRIGATION)
+        - 严禁枯燥单色平涂。大面积区域（地面、广场、建筑主体）必须注入细腻、平滑的明度渐变或色相退晕，体现工业设计的高级感。
+        - 色彩锚点：严格参考审计报告 [${dnaStream}]。建立 1:1 的语义化色彩映射。
+        - 稳定性控制：禁止产生任何色斑或不规则色彩块。
+
+        ### 3. 三相投影精密对齐 (3% PROJECTION CONSTRAINT)
+        - 所有阴影必须严格基于线稿中的几何实体反推。投影偏差强制锁定在 3% 以内。
+        - 投影应具有物理上的真实衰减和边缘柔和度。
+
+        ### 4. 纹理纯净化标准 (STRICT TEXTURE PURIFICATION)
+        - 极致剔除笔触：严禁出现水彩、油画或其他任何艺术化笔触。
+        - 零噪音地面：地面材质必须是极致纯净的平面。严禁颗粒感、碎点。
+
+        ### 5. 输出规范：
+        - 比例绝对锁定：输出结果必须像素级对齐 ${aspectRatio} 比例，严禁任何拉伸或变形。
       `;
 
       const response = await ai.models.generateContent({
@@ -147,263 +164,159 @@ const App: React.FC = () => {
           ]
         },
         config: {
-          imageConfig: {
-            aspectRatio: aspectRatio,
-            imageSize: selectedSize
+          imageConfig: { 
+            // @ts-ignore
+            aspectRatio: aspectRatio, 
+            imageSize: selectedSize 
           }
         }
       });
 
-      const part = response.candidates[0].content.parts.find(p => p.inlineData);
+      const part = response.candidates?.[0]?.content?.parts?.find(p => p.inlineData);
       if (part?.inlineData) {
         setResultImage(`data:image/png;base64,${part.inlineData.data}`);
       }
     } catch (err: any) {
-      console.error(err);
-      alert(`生成失败: ${err.message || '渲染引擎响应超时'}`);
+      console.error("Synthesis Error:", err);
+      if (err.message?.includes("429") || err.message?.includes("Requested entity was not found")) {
+        alert("API 配置异常或权限不足，请重新选择 Paid 项目的 API Key。");
+        handleSelectKey();
+      }
     } finally {
       setStatus('idle');
     }
   };
 
+  if (!isKeySelected) {
+    return (
+      <div className="h-screen bg-black flex items-center justify-center">
+        <div className="text-center space-y-8 animate-pulse">
+          <h2 className="text-white text-3xl font-black italic tracking-tighter">INITIALIZING SYSTEM...</h2>
+          <button onClick={handleSelectKey} className="px-12 py-4 bg-emerald-500 text-black font-black uppercase tracking-widest rounded-full hover:bg-white transition-all">
+            ACTIVATE API ENGINE
+          </button>
+          <p className="text-white/20 text-xs uppercase tracking-widest mt-4">Required: Paid Google Cloud Project Key</p>
+          <a href="https://ai.google.dev/gemini-api/docs/billing" target="_blank" className="block text-[8px] text-emerald-500/50 underline uppercase tracking-widest">Billing Documentation</a>
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className="min-h-screen bg-[#0d0d0f] text-slate-400 font-sans selection:bg-blue-600/30">
-      {/* API Key Modal */}
-      {showKeyModal && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center p-6 backdrop-blur-md bg-black/60">
-          <div className="bg-[#1a1a1e] border border-white/10 rounded-[2.5rem] p-10 max-w-md w-full shadow-2xl animate-in fade-in zoom-in duration-300">
-            <h3 className="text-white text-xl font-bold tracking-tight mb-2">配置 API 秘钥</h3>
-            <p className="text-slate-500 text-xs mb-8 leading-relaxed">请输入您的 Google Gemini API Key。该秘钥将仅存储在您的浏览器本地。</p>
-            
-            <div className="space-y-6">
-              <div className="relative group">
-                <input 
-                  type="password" 
-                  value={inputKey}
-                  onChange={(e) => setInputKey(e.target.value)}
-                  placeholder="AIzaSy..." 
-                  className="w-full bg-black/40 border border-white/5 rounded-2xl px-6 py-4 text-white text-sm focus:outline-none focus:border-blue-500/50 transition-all placeholder:opacity-20"
-                />
-                <div className="absolute inset-0 rounded-2xl bg-blue-500/5 opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity"></div>
-              </div>
-              
-              <div className="flex gap-4">
-                <button 
-                  onClick={() => setShowKeyModal(false)}
-                  className="flex-1 py-4 bg-white/5 hover:bg-white/10 text-white text-[10px] font-black uppercase tracking-widest rounded-2xl transition-all"
-                >
-                  取消
-                </button>
-                <button 
-                  onClick={saveApiKey}
-                  className="flex-[2] py-4 bg-blue-600 hover:bg-blue-500 text-white text-[10px] font-black uppercase tracking-widest rounded-2xl transition-all shadow-lg shadow-blue-600/20"
-                >
-                  确认保存
-                </button>
-              </div>
-              <p className="text-[9px] text-center text-slate-600 uppercase tracking-tighter">
-                尚未拥有 Key？<a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noreferrer" className="text-blue-500 hover:underline">去 AI Studio 免费获取</a>
-              </p>
+    <div className="h-screen bg-[#020202] text-[#a1a1aa] flex overflow-hidden font-sans">
+      <aside className="w-[320px] lg:w-[400px] border-r border-white/5 bg-[#080808] p-8 flex flex-col gap-10 overflow-y-auto scrollbar-hide shrink-0 z-20">
+        <header className="space-y-1">
+          <h1 className="text-white text-2xl font-black tracking-[-0.05em] uppercase italic leading-none">
+            COLOR LAYOUT<br/>
+            <span className="text-emerald-500 text-sm tracking-[0.2em] font-black italic">AI SYSTEM</span>
+          </h1>
+          <p className="text-[7px] font-black text-white/20 uppercase tracking-[0.8em]">Industrial Grade Fidelity V25</p>
+        </header>
+
+        <section className="space-y-8">
+          <div className="space-y-4">
+            <label className="text-[9px] font-black uppercase tracking-[0.4em] text-white/30">01. 风格 DNA 审计</label>
+            <div onClick={() => refInputRef.current?.click()} className="aspect-square bg-white/[0.02] border border-white/10 rounded-[2rem] cursor-pointer hover:border-emerald-500/40 transition-all flex items-center justify-center overflow-hidden group">
+              {refImage ? <img src={refImage} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-[2s]" /> : <div className="text-white/5 text-[10px] font-black tracking-widest uppercase">Style Reference</div>}
+              <input ref={refInputRef} type="file" className="hidden" accept="image/*" onChange={(e) => handleFileUpload(e, 'ref')} />
             </div>
-          </div>
-        </div>
-      )}
-
-      <nav className="border-b border-white/5 bg-black/40 backdrop-blur-xl sticky top-0 z-50 px-10 py-5 flex justify-between items-center">
-        <div className="flex items-center gap-6">
-          <div className="flex flex-col">
-            <h1 className="text-white text-xl font-bold tracking-tighter leading-none uppercase">
-              Precision<span className="text-blue-500">Render</span>
-            </h1>
-            <span className="text-[9px] uppercase tracking-[0.4em] text-slate-500 font-black mt-1">Architecture Visualization Engine</span>
-          </div>
-        </div>
-        
-        <div className="flex items-center gap-8">
-          <div className="flex items-center gap-2">
-            <div className={`w-1.5 h-1.5 rounded-full ${hasKey ? 'bg-emerald-500 shadow-[0_0_10px_#10b981]' : 'bg-red-500 animate-pulse'}`}></div>
-            <span className="text-[10px] font-bold uppercase tracking-widest text-slate-500">{hasKey ? 'Engine Linked' : 'Key Missing'}</span>
-          </div>
-          <div className="flex flex-col items-end">
-            <button 
-              onClick={() => setShowKeyModal(true)} 
-              className="px-5 py-2 bg-white/5 hover:bg-white/10 rounded-full text-[10px] font-black uppercase tracking-widest transition-all border border-white/10"
-            >
-              {hasKey ? '更改 API 秘钥' : '配置付费 API 秘钥'}
-            </button>
-            <a href="https://ai.google.dev/gemini-api/docs/billing" target="_blank" rel="noreferrer" className="text-[7px] text-slate-600 mt-1 hover:text-blue-500 transition-colors uppercase tracking-tighter">
-              需要关联付费项目 (Billing Required)
-            </a>
-          </div>
-        </div>
-      </nav>
-
-      <main className="max-w-[1800px] mx-auto p-10 grid grid-cols-1 lg:grid-cols-3 gap-10 h-[calc(100vh-140px)]">
-        {/* Step 1: Style Reference */}
-        <section className="bg-[#16161a] rounded-[2rem] border border-white/5 p-8 flex flex-col shadow-2xl overflow-hidden group">
-          <header className="flex justify-between items-center mb-6">
-            <h2 className="text-[10px] font-black uppercase tracking-[0.4em] text-blue-500">01. 风格参考 / Reference</h2>
-            <div className="w-2 h-2 rounded-full bg-blue-500/20 group-hover:bg-blue-500 transition-colors"></div>
-          </header>
-          
-          <div 
-            onClick={() => refInputRef.current?.click()}
-            className="flex-1 bg-black/40 rounded-3xl border border-white/5 border-dashed hover:border-blue-500/30 transition-all cursor-pointer flex items-center justify-center relative overflow-hidden mb-6"
-          >
-            {refImage ? (
-              <img src={refImage} className="max-w-full max-h-full object-contain p-2" alt="Style Ref" />
-            ) : (
-              <div className="text-center opacity-20 group-hover:opacity-40 transition-all">
-                <div className="text-4xl mb-3">◰</div>
-                <p className="text-[9px] font-black uppercase tracking-[0.2em]">点击上传 参考彩平图</p>
-              </div>
-            )}
-            <input ref={refInputRef} type="file" className="hidden" accept="image/*" onChange={(e) => handleFileUpload(e, 'ref')} />
           </div>
 
           <div className="space-y-4">
-            <div className="bg-black/20 rounded-2xl p-5 border border-white/5 min-h-[140px] flex flex-col">
-              <span className="text-[9px] font-black text-slate-600 uppercase tracking-widest block mb-2">解析指令 / Prompt:</span>
-              <textarea 
-                value={analysisPrompt}
-                onChange={(e) => setAnalysisPrompt(e.target.value)}
-                className="flex-1 bg-transparent border-none text-[10px] text-slate-400 leading-relaxed resize-none focus:ring-0 scrollbar-hide font-medium"
-                placeholder="输入解析指令..."
-              />
+            <label className="text-[9px] font-black uppercase tracking-[0.4em] text-white/30">02. 第一性线稿 (比例锁定: {aspectRatio})</label>
+            <div onClick={() => lineartInputRef.current?.click()} className="aspect-video bg-white/[0.02] border border-white/10 rounded-[2rem] cursor-pointer hover:border-emerald-500/40 transition-all flex items-center justify-center overflow-hidden group">
+              {lineartImage ? <img src={lineartImage} className="w-full h-full object-contain p-8 group-hover:scale-105 transition-transform duration-[2s]" /> : <div className="text-white/5 text-[10px] font-black tracking-widest uppercase">CAD Lineart</div>}
+              <input ref={lineartInputRef} type="file" className="hidden" accept="image/*" onChange={(e) => handleFileUpload(e, 'lineart')} />
             </div>
-            
-            <div className="bg-black/30 rounded-2xl p-5 border border-white/5 min-h-[80px]">
-              <span className="text-[9px] font-black text-blue-500/60 uppercase tracking-widest block mb-2">风格基因 / Style DNA:</span>
-              {styleDesc ? (
-                <p className="text-[10px] text-slate-400 leading-relaxed italic line-clamp-4">{styleDesc}</p>
-              ) : (
-                <div className="flex flex-col items-center justify-center pt-2 opacity-30">
-                  <div className="w-full h-1 bg-white/5 rounded-full mb-2"></div>
-                  <div className="w-2/3 h-1 bg-white/5 rounded-full"></div>
-                </div>
-              )}
-            </div>
-
-            <button 
-              onClick={analyzeStyle}
-              disabled={!refImage || status === 'analyzing'}
-              className="w-full py-4 bg-blue-600 hover:bg-blue-500 text-white text-[10px] font-black uppercase tracking-[0.3em] rounded-2xl transition-all shadow-xl shadow-blue-600/20 disabled:opacity-10 active:scale-95"
-            >
-              {status === 'analyzing' ? '深度解析中...' : '启动风格解析'}
-            </button>
           </div>
         </section>
 
-        {/* Step 2: CAD Lineart */}
-        <section className="bg-[#16161a] rounded-[2rem] border border-white/5 p-8 flex flex-col shadow-2xl">
-          <header className="flex justify-between items-center mb-6">
-            <h2 className="text-[10px] font-black uppercase tracking-[0.4em] text-emerald-500">02. CAD 线稿 / Structural</h2>
-            <div className="flex gap-2">
-              {(['1K', '2K', '4K'] as ImageSize[]).map(size => (
-                <button 
-                  key={size}
-                  onClick={() => setSelectedSize(size)}
-                  className={`px-3 py-1 rounded-lg text-[9px] font-black transition-all ${selectedSize === size ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-600/20' : 'bg-white/5 text-slate-500 hover:text-white'}`}
-                >
-                  {size}
-                </button>
-              ))}
+        <section className="mt-auto space-y-8">
+          <div className="space-y-4">
+            <div className="flex justify-between items-end">
+              <span className="text-[9px] font-black uppercase tracking-[0.4em] text-white/20">几何拓扑保真</span>
+              <span className="text-white text-xl font-black italic">{fidelity}%</span>
             </div>
-          </header>
-
-          <div 
-            onClick={() => lineartInputRef.current?.click()}
-            className="flex-1 bg-white rounded-3xl border border-white/10 flex items-center justify-center relative overflow-hidden group shadow-[inset_0_2px_10px_rgba(0,0,0,0.05)] cursor-pointer"
-          >
-            {lineartImage ? (
-              <img src={lineartImage} className="max-w-full max-h-full object-contain p-8 transition-transform duration-1000 group-hover:scale-105" alt="CAD Input" />
-            ) : (
-              <div className="text-center text-slate-400">
-                <div className="text-4xl mb-3 opacity-20">⌬</div>
-                <p className="text-[9px] font-black uppercase tracking-[0.2em]">上传 黑白 CAD 线稿</p>
-              </div>
-            )}
-            <input ref={lineartInputRef} type="file" className="hidden" accept="image/*" onChange={(e) => handleFileUpload(e, 'lineart')} />
+            <input type="range" min="0" max="100" value={fidelity} onChange={(e) => setFidelity(parseInt(e.target.value))} className="w-full h-1 bg-white/5 appearance-none accent-emerald-500 rounded-full cursor-pointer" />
           </div>
 
-          <div className="mt-8 space-y-6">
-            <div className="px-2">
-              <div className="flex justify-between items-center mb-3">
-                <label className="text-[10px] font-black uppercase tracking-widest text-slate-500">迁移强度 / Strength</label>
-                <span className="text-[10px] font-mono text-emerald-500 font-bold">{styleStrength}％</span>
-              </div>
-              <input 
-                type="range" min="0" max="100" value={styleStrength} 
-                onChange={(e) => setStyleStrength(parseInt(e.target.value))}
-                className="w-full h-1 bg-white/5 rounded-full appearance-none accent-emerald-500 cursor-pointer"
-              />
+          <button onClick={executeSynthesis} disabled={status !== 'idle' || !lineartImage} className="w-full py-6 bg-white text-black text-[11px] font-black uppercase tracking-[0.8em] rounded-[1rem] hover:bg-emerald-500 hover:text-white transition-all shadow-2xl disabled:opacity-5">
+            {status === 'rendering' ? '处理物理投影与高级渐变...' : '执行工业级合成'}
+          </button>
+        </section>
+      </aside>
+
+      <main className="flex-1 bg-[#020202] p-12 lg:p-20 flex flex-col items-center justify-center relative">
+        <nav className="absolute top-12 left-12 right-12 flex justify-between items-center z-10">
+          <div className="flex gap-4">
+            {(['1K', '2K', '4K'] as ImageSize[]).map(s => (
+              <button key={s} onClick={() => setSelectedSize(s)} className={`px-6 py-2 rounded-full text-[9px] font-black transition-all border ${selectedSize === s ? 'bg-white text-black border-white shadow-lg' : 'text-white/20 border-white/5 hover:border-white/20'}`}>{s} RESOLUTION</button>
+            ))}
+          </div>
+          <button onClick={handleSelectKey} className="px-6 py-2 bg-emerald-500/10 text-emerald-500 border border-emerald-500/20 rounded-full text-[9px] font-black hover:bg-emerald-500 hover:text-white transition-all uppercase tracking-widest">引擎管理</button>
+        </nav>
+
+        <div className="w-full h-full max-w-7xl rounded-[4rem] border border-white/[0.03] bg-[#050505] flex items-center justify-center overflow-hidden relative shadow-[0_0_120px_rgba(0,0,0,0.6)] group">
+          {status === 'analyzing' && (
+            <div className="flex flex-col items-center gap-6 animate-pulse">
+              <div className="text-emerald-500 text-[10px] font-black uppercase tracking-[1em]">DNA 审计引擎启动中...</div>
+              <div className="w-64 h-[1px] bg-emerald-500/20"></div>
             </div>
-
-            <button 
-              onClick={renderLayout}
-              disabled={status !== 'idle' || !lineartImage || !styleDesc}
-              className="w-full py-5 bg-white hover:bg-emerald-400 text-black text-[12px] font-black uppercase tracking-[0.5em] rounded-3xl transition-all shadow-xl shadow-white/5 active:scale-95 disabled:opacity-5 disabled:grayscale"
-            >
-              {status === 'rendering' ? '引擎运算中...' : '生成彩色布局图'}
-            </button>
-          </div>
-        </section>
-
-        {/* Step 3: Result */}
-        <section className="bg-[#16161a] rounded-[2rem] border border-white/5 p-8 flex flex-col shadow-2xl relative overflow-hidden">
-          <header className="flex justify-between items-center mb-6 relative z-10">
-            <h2 className="text-[10px] font-black uppercase tracking-[0.4em] text-purple-500">03. 渲染结果 / Output</h2>
-            {resultImage && (
-              <a 
-                href={resultImage} 
-                download={`CAD_Render_${selectedSize}.png`} 
-                className="px-4 py-2 bg-purple-600 rounded-xl text-[9px] font-black uppercase text-white hover:bg-purple-500 transition-all shadow-lg shadow-purple-600/20"
-              >
-                下载超清图
-              </a>
-            )}
-          </header>
-
-          <div className="flex-1 bg-black/60 rounded-3xl border border-white/5 flex items-center justify-center relative overflow-hidden shadow-inner">
-            {status === 'rendering' && (
-              <div className="absolute inset-0 z-20 bg-black/95 flex flex-col items-center justify-center backdrop-blur-2xl">
-                <div className="relative w-40 h-40 flex items-center justify-center">
-                  <div className="absolute inset-0 border-[1px] border-white/5 rounded-full animate-ping"></div>
-                  <div className="absolute inset-4 border-[1px] border-purple-500/20 rounded-full animate-pulse"></div>
-                  <div className="text-[10px] font-black uppercase tracking-[0.5em] text-white">Rendering</div>
-                </div>
-                <p className="mt-8 text-slate-500 text-[9px] uppercase tracking-widest font-medium text-center px-4">梯度色彩映射中 · 材质动态迁移中</p>
+          )}
+          
+          {status === 'rendering' && (
+            <div className="flex flex-col items-center gap-10">
+              <div className="w-20 h-20 border-[3px] border-white/5 border-t-emerald-500 rounded-full animate-spin"></div>
+              <div className="space-y-3 text-center">
+                <div className="text-white text-[11px] font-black uppercase tracking-[1em]">3% 三相投影精密渲染中</div>
+                <div className="text-white/10 text-[8px] font-bold uppercase tracking-[0.6em]">正在强制注入高级渐变退晕</div>
               </div>
-            )}
-            {resultImage ? (
-              <img src={resultImage} className="max-w-full max-h-full object-contain p-2 animate-in fade-in duration-1000" alt="Final Result" />
-            ) : (
-              <div className="text-center opacity-10 select-none">
-                <p className="text-[12px] font-black uppercase tracking-[1em]">Awaiting</p>
+            </div>
+          )}
+
+          {!resultImage && status === 'idle' && (
+            <div className="opacity-[0.02] flex flex-col items-center gap-12 select-none pointer-events-none translate-y-12">
+              <div className="text-[20rem] font-black italic tracking-tighter leading-none">AI</div>
+              <div className="text-[14px] tracking-[4em] font-black ml-[4em]">COLOR LAYOUT AI</div>
+            </div>
+          )}
+
+          {resultImage && status === 'idle' && (
+            <div className="w-full h-full flex items-center justify-center animate-reveal bg-white">
+              <img src={resultImage} className="max-w-full max-h-full object-contain" />
+              <div className="absolute inset-0 bg-black/98 opacity-0 group-hover:opacity-100 transition-all duration-700 flex flex-col items-center justify-center gap-10 backdrop-blur-3xl">
+                <a href={resultImage} download="COLOR_LAYOUT_FINAL.png" className="px-24 py-6 bg-white text-black rounded-full text-[14px] font-black uppercase tracking-[1em] hover:bg-emerald-500 hover:text-white transition-all transform scale-95 group-hover:scale-100 duration-1000">导出工业级图纸</a>
+                <button onClick={() => setResultImage(null)} className="text-[10px] text-white/20 hover:text-red-500 uppercase tracking-[0.8em] transition-colors font-black">销毁当前会话</button>
               </div>
-            )}
-          </div>
-          <div className="absolute top-0 right-0 w-32 h-32 bg-purple-600/5 blur-[80px] rounded-full"></div>
-        </section>
+            </div>
+          )}
+        </div>
+
+        <footer className="absolute bottom-12 flex gap-32 opacity-[0.02] text-[9px] font-black uppercase tracking-[1.5em] pointer-events-none">
+          <span>Absolute Geometry Fidelity</span>
+          <span>Zero Hallucination Logic</span>
+          <span>Advanced Gradient Mapping</span>
+        </footer>
       </main>
 
-      <footer className="px-10 py-6 flex justify-between items-center text-[8px] font-bold text-slate-700 uppercase tracking-[0.3em]">
-        <div className="flex gap-12">
-          <span className="flex items-center gap-2 italic">Architecture Visual Studio v5.6</span>
-          <span className="flex items-center gap-2"><div className="w-1 h-1 bg-emerald-500 rounded-full"></div>Topology Consistency: 100%</span>
-        </div>
-        <div>All Systems Nominal · Processing on Gemini Vision Engine</div>
-      </footer>
-
       <style>{`
-        input[type="range"]::-webkit-slider-thumb {
-          -webkit-appearance: none; height: 14px; width: 14px; border-radius: 50%; background: #10b981; border: 3px solid #16161a; cursor: pointer;
+        @keyframes reveal { 
+          0% { opacity: 0; filter: blur(60px); transform: scale(1.08); } 
+          100% { opacity: 1; filter: blur(0); transform: scale(1); } 
         }
-        @keyframes fade-in { from { opacity: 0; transform: scale(0.98); } to { opacity: 1; transform: scale(1); } }
-        @keyframes zoom-in { from { transform: scale(0.95); opacity: 0; } to { transform: scale(1); opacity: 1; } }
-        .animate-in { animation: zoom-in 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
+        .animate-reveal { animation: reveal 1.5s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
         .scrollbar-hide::-webkit-scrollbar { display: none; }
-        .scrollbar-hide { -ms-overflow-style: none; scrollbar-width: none; }
+        input[type="range"]::-webkit-slider-thumb {
+          -webkit-appearance: none;
+          height: 24px;
+          width: 24px;
+          border-radius: 50%;
+          background: #fff;
+          border: 6px solid #10b981;
+          cursor: pointer;
+          transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+        input[type="range"]::-webkit-slider-thumb:hover { transform: scale(1.3); }
       `}</style>
     </div>
   );
