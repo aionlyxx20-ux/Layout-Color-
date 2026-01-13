@@ -14,33 +14,33 @@ const App: React.FC = () => {
   const [dnaStream, setDnaStream] = useState<string>("");
   const [fidelity, setFidelity] = useState<number>(100);
   const [selectedSize, setSelectedSize] = useState<ImageSize>("1K");
-  const [isKeySelected, setIsKeySelected] = useState<boolean>(false);
-
-  // 检查 API Key 状态并强制选择
-  const checkAndSelectKey = async () => {
-    // @ts-ignore
-    const hasKey = await window.aistudio.hasSelectedApiKey();
-    if (!hasKey) {
-      // @ts-ignore
-      await window.aistudio.openSelectKey();
-      setIsKeySelected(true);
-    } else {
-      setIsKeySelected(true);
-    }
-  };
-
-  useEffect(() => {
-    checkAndSelectKey();
-  }, []);
-
-  const handleSelectKey = async () => {
-    // @ts-ignore
-    await window.aistudio.openSelectKey();
-    setIsKeySelected(true);
-  };
 
   const refInputRef = useRef<HTMLInputElement>(null);
   const lineartInputRef = useRef<HTMLInputElement>(null);
+
+  // 处理 API 密钥选择
+  const handleSelectKey = async () => {
+    try {
+      // @ts-ignore
+      await window.aistudio.openSelectKey();
+      console.log("API Key interaction completed.");
+    } catch (err) {
+      console.error("Failed to open API Key dialog", err);
+    }
+  };
+
+  // 初始检查，如果没选 Key 则引导选择，但不阻塞 UI
+  useEffect(() => {
+    const initCheck = async () => {
+      // @ts-ignore
+      const hasKey = await window.aistudio.hasSelectedApiKey();
+      if (!hasKey) {
+        // @ts-ignore
+        window.aistudio.openSelectKey();
+      }
+    };
+    initCheck();
+  }, []);
 
   const calculateAspectRatio = (width: number, height: number): string => {
     const ratio = width / height;
@@ -110,6 +110,9 @@ const App: React.FC = () => {
       setDnaStream(response.text || "");
     } catch (err: any) {
       console.error("Audit Error:", err);
+      if (err.message?.includes("Requested entity was not found")) {
+        handleSelectKey();
+      }
     } finally {
       setStatus('idle');
     }
@@ -171,25 +174,13 @@ const App: React.FC = () => {
     } catch (err: any) {
       console.error("Synthesis Error:", err);
       if (err.message?.includes("429") || err.message?.includes("not found")) {
+        alert("API 密钥验证失败或未配置计费，请通过“引擎管理”重新设置。");
         handleSelectKey();
       }
     } finally {
       setStatus('idle');
     }
   };
-
-  if (!isKeySelected) {
-    return (
-      <div className="h-screen bg-black flex items-center justify-center">
-        <div className="text-center space-y-8">
-          <h2 className="text-white text-3xl font-black italic animate-pulse">SYSTEM INITIALIZING...</h2>
-          <button onClick={handleSelectKey} className="px-12 py-4 bg-emerald-500 text-black font-black uppercase tracking-widest rounded-full hover:bg-white transition-all">
-            ACTIVATE API ENGINE
-          </button>
-        </div>
-      </div>
-    );
-  }
 
   return (
     <div className="h-screen bg-[#020202] text-[#a1a1aa] flex overflow-hidden font-sans">
