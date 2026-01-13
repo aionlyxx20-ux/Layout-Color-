@@ -16,9 +16,6 @@ const App: React.FC = () => {
   const [selectedSize, setSelectedSize] = useState<ImageSize>("1K");
   const [isKeySelected, setIsKeySelected] = useState<boolean>(false);
 
-  const refInputRef = useRef<HTMLInputElement>(null);
-  const lineartInputRef = useRef<HTMLInputElement>(null);
-
   // 检查 API Key 状态并强制选择
   const checkAndSelectKey = async () => {
     // @ts-ignore
@@ -26,7 +23,6 @@ const App: React.FC = () => {
     if (!hasKey) {
       // @ts-ignore
       await window.aistudio.openSelectKey();
-      // 按照规则，触发 openSelectKey 后假定成功以避免 race condition 阻塞
       setIsKeySelected(true);
     } else {
       setIsKeySelected(true);
@@ -42,6 +38,9 @@ const App: React.FC = () => {
     await window.aistudio.openSelectKey();
     setIsKeySelected(true);
   };
+
+  const refInputRef = useRef<HTMLInputElement>(null);
+  const lineartInputRef = useRef<HTMLInputElement>(null);
 
   const calculateAspectRatio = (width: number, height: number): string => {
     const ratio = width / height;
@@ -64,12 +63,8 @@ const App: React.FC = () => {
         ctx.fillStyle = "#FFFFFF";
         ctx.fillRect(0, 0, canvas.width, canvas.height);
         ctx.drawImage(img, 0, 0);
-        
         const ratio = calculateAspectRatio(img.width, img.height);
-        resolve({
-          data: canvas.toDataURL('image/png'),
-          ratio: ratio
-        });
+        resolve({ data: canvas.toDataURL('image/png'), ratio: ratio });
       };
       img.src = dataUrl;
     });
@@ -97,28 +92,24 @@ const App: React.FC = () => {
   const auditNeuralDNA = async (imageData: string) => {
     setStatus('analyzing');
     try {
-      // 实时创建实例以确保获取最新 API Key
       const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || "" });
       const response = await ai.models.generateContent({
         model: 'gemini-3-flash-preview',
         contents: [{
           parts: [
             { inlineData: { data: imageData.split(',')[1], mimeType: 'image/jpeg' } },
-            { text: `[CRITICAL STYLE AUDIT - HIGH STABILITY MODE]
-            深度解析参考图并锁定核心参数，严禁偏差：
-            1. 高级渐变协议：识别大面积区域（地面/墙体）的明度变化步长与退晕方向。
-            2. 色彩DNA映射：精确记录核心色值、色彩灌溉度分布、以及各语义组件（家具/建筑/水体）的色彩归属。
-            3. 光影拓扑：分析光源主方向、阴影边缘羽化值、以及投影相对于实体的几何位置。
-            4. 纹理控制：确认其无笔触、低底噪、高平滑度的工业特性。` }
+            { text: `[DETERMINISTIC DNA AUDIT]
+            作为高级建筑色彩审计师，请提取此图的绝对色彩DNA：
+            1. 核心调性：提取主要背景、建筑体、绿化、家具的确切色彩值（HEX/RGB）。
+            2. 渐变逻辑：分析大面积区域的色彩退晕步长、退晕方向、明度梯度（High-End Gradient）。
+            3. 物理阴影：分析阴影边缘的硬度与色偏规律。
+            请以此作为后续填色的唯一参考基准，严禁任何随机发散。` }
           ]
         }]
       });
       setDnaStream(response.text || "");
     } catch (err: any) {
       console.error("Audit Error:", err);
-      if (err.message?.includes("Requested entity was not found")) {
-        handleSelectKey();
-      }
     } finally {
       setStatus('idle');
     }
@@ -129,30 +120,31 @@ const App: React.FC = () => {
     setStatus('rendering');
     try {
       const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || "" });
-      
       const prompt = `
-        [COLOR LAYOUT-AI - INDUSTRIAL FIDELITY ENGINE V25]
+        [DETERMINISTIC RENDERING ENGINE - STABILITY LOCK V28]
+
+        ### ROLE: INDUSTRIAL CAD COLORIZER
         
-        ### 1. 线稿第一性铁律 (ABSOLUTE LINEART PRIMACY - MANDATORY)
-        - 原始线稿是物理世界的唯一真理。严禁修改、重叠、模糊、重绘、加粗或替换任何原始 CAD 线条。
-        - 零幻觉准则 (ZERO HALLUCINATION)：严禁在线稿未定义的区域增加任何家具、物件、植物或结构。AI 禁止自行“脑补”细节。
-        - 填色逻辑一致性：线稿定义的封闭模块必须执行高度统一的填色。
+        ### 1. 线稿第一性铁律 (ABSOLUTE FIDELITY - NO EXCEPTIONS)
+        - 原始线稿是物理边界。禁止重绘、加粗、模糊或修改原始 CAD 线条。
+        - 零幻觉准则：禁止在线稿未定义区域生成任何家具、纹理或结构。严禁“脑补”细节。
+        - 填色一致性：相同功能区域（如所有阶梯、所有柜体）的色彩必须高度一致，剔除所有杂色。
 
-        ### 2. 高级渐变与色彩灌溉 (ADVANCED GRADIENT IRRIGATION)
-        - 严禁枯燥单色平涂。大面积区域（地面、广场、建筑主体）必须注入细腻、平滑的明度渐变或色相退晕，体现工业设计的高级感。
-        - 色彩锚点：严格参考审计报告 [${dnaStream}]。建立 1:1 的语义化色彩映射。
-        - 稳定性控制：禁止产生任何色斑或不规则色彩块。
+        ### 2. 多维色彩稳定性锁 (DETERMINISTIC DNA LOCK)
+        - 必须严格套用审计出的色彩DNA：[${dnaStream}]。
+        - 强制高级渐变：大面积地面与建筑墙体禁止使用纯色。必须注入基于审计逻辑的线性、细腻渐变退晕。
+        - 语义化映射：根据线稿识别建筑墙体、家具、绿植、湖水、洁具，并执行 1:1 风格迁移。
 
-        ### 3. 三相投影精密对齐 (3% PROJECTION CONSTRAINT)
-        - 所有阴影必须严格基于线稿中的几何实体反推。投影偏差强制锁定在 3% 以内。
-        - 投影应具有物理上的真实衰减和边缘柔和度。
+        ### 3. 三相投影刚性约束 (3% PROJECTION LIMIT)
+        - 阴影必须完全基于线稿物件几何反推。投影偏差严控在 3% 以内。
+        - 阴影质感需完全吻合参考风格的硬度与透明度。
 
-        ### 4. 纹理纯净化标准 (STRICT TEXTURE PURIFICATION)
-        - 极致剔除笔触：严禁出现水彩、油画或其他任何艺术化笔触。
-        - 零噪音地面：地面材质必须是极致纯净的平面。严禁颗粒感、碎点。
+        ### 4. 纯净化执行 (STRICT PURIFICATION)
+        - 彻底剔除所有艺术笔触、水彩纹理、手绘痕迹。
+        - 地面必须极致纯净，仅通过微弱的明度渐变来体现高级感。
 
-        ### 5. 输出规范：
-        - 比例绝对锁定：输出结果必须像素级对齐 ${aspectRatio} 比例，严禁任何拉伸或变形。
+        ### 5. 输出格式控制：
+        - 宽高比必须严格对齐 ${aspectRatio}。图像严禁任何拉伸、压缩或裁剪。
       `;
 
       const response = await ai.models.generateContent({
@@ -178,8 +170,7 @@ const App: React.FC = () => {
       }
     } catch (err: any) {
       console.error("Synthesis Error:", err);
-      if (err.message?.includes("429") || err.message?.includes("Requested entity was not found")) {
-        alert("API 配置异常或权限不足，请重新选择 Paid 项目的 API Key。");
+      if (err.message?.includes("429") || err.message?.includes("not found")) {
         handleSelectKey();
       }
     } finally {
@@ -190,13 +181,11 @@ const App: React.FC = () => {
   if (!isKeySelected) {
     return (
       <div className="h-screen bg-black flex items-center justify-center">
-        <div className="text-center space-y-8 animate-pulse">
-          <h2 className="text-white text-3xl font-black italic tracking-tighter">INITIALIZING SYSTEM...</h2>
+        <div className="text-center space-y-8">
+          <h2 className="text-white text-3xl font-black italic animate-pulse">SYSTEM INITIALIZING...</h2>
           <button onClick={handleSelectKey} className="px-12 py-4 bg-emerald-500 text-black font-black uppercase tracking-widest rounded-full hover:bg-white transition-all">
             ACTIVATE API ENGINE
           </button>
-          <p className="text-white/20 text-xs uppercase tracking-widest mt-4">Required: Paid Google Cloud Project Key</p>
-          <a href="https://ai.google.dev/gemini-api/docs/billing" target="_blank" className="block text-[8px] text-emerald-500/50 underline uppercase tracking-widest">Billing Documentation</a>
         </div>
       </div>
     );
@@ -210,7 +199,7 @@ const App: React.FC = () => {
             COLOR LAYOUT<br/>
             <span className="text-emerald-500 text-sm tracking-[0.2em] font-black italic">AI SYSTEM</span>
           </h1>
-          <p className="text-[7px] font-black text-white/20 uppercase tracking-[0.8em]">Industrial Grade Fidelity V25</p>
+          <p className="text-[7px] font-black text-white/20 uppercase tracking-[0.8em]">Absolute Fidelity V28</p>
         </header>
 
         <section className="space-y-8">
@@ -223,7 +212,7 @@ const App: React.FC = () => {
           </div>
 
           <div className="space-y-4">
-            <label className="text-[9px] font-black uppercase tracking-[0.4em] text-white/30">02. 第一性线稿 (比例锁定: {aspectRatio})</label>
+            <label className="text-[9px] font-black uppercase tracking-[0.4em] text-white/30">02. 线稿 (比例锁: {aspectRatio})</label>
             <div onClick={() => lineartInputRef.current?.click()} className="aspect-video bg-white/[0.02] border border-white/10 rounded-[2rem] cursor-pointer hover:border-emerald-500/40 transition-all flex items-center justify-center overflow-hidden group">
               {lineartImage ? <img src={lineartImage} className="w-full h-full object-contain p-8 group-hover:scale-105 transition-transform duration-[2s]" /> : <div className="text-white/5 text-[10px] font-black tracking-widest uppercase">CAD Lineart</div>}
               <input ref={lineartInputRef} type="file" className="hidden" accept="image/*" onChange={(e) => handleFileUpload(e, 'lineart')} />
@@ -234,14 +223,14 @@ const App: React.FC = () => {
         <section className="mt-auto space-y-8">
           <div className="space-y-4">
             <div className="flex justify-between items-end">
-              <span className="text-[9px] font-black uppercase tracking-[0.4em] text-white/20">几何拓扑保真</span>
+              <span className="text-[9px] font-black uppercase tracking-[0.4em] text-white/20">保真系数</span>
               <span className="text-white text-xl font-black italic">{fidelity}%</span>
             </div>
             <input type="range" min="0" max="100" value={fidelity} onChange={(e) => setFidelity(parseInt(e.target.value))} className="w-full h-1 bg-white/5 appearance-none accent-emerald-500 rounded-full cursor-pointer" />
           </div>
 
           <button onClick={executeSynthesis} disabled={status !== 'idle' || !lineartImage} className="w-full py-6 bg-white text-black text-[11px] font-black uppercase tracking-[0.8em] rounded-[1rem] hover:bg-emerald-500 hover:text-white transition-all shadow-2xl disabled:opacity-5">
-            {status === 'rendering' ? '处理物理投影与高级渐变...' : '执行工业级合成'}
+            {status === 'rendering' ? '执行确定性算法渲染...' : '生成高级色彩布局'}
           </button>
         </section>
       </aside>
@@ -250,7 +239,7 @@ const App: React.FC = () => {
         <nav className="absolute top-12 left-12 right-12 flex justify-between items-center z-10">
           <div className="flex gap-4">
             {(['1K', '2K', '4K'] as ImageSize[]).map(s => (
-              <button key={s} onClick={() => setSelectedSize(s)} className={`px-6 py-2 rounded-full text-[9px] font-black transition-all border ${selectedSize === s ? 'bg-white text-black border-white shadow-lg' : 'text-white/20 border-white/5 hover:border-white/20'}`}>{s} RESOLUTION</button>
+              <button key={s} onClick={() => setSelectedSize(s)} className={`px-6 py-2 rounded-full text-[9px] font-black transition-all border ${selectedSize === s ? 'bg-white text-black border-white shadow-lg' : 'text-white/20 border-white/5 hover:border-white/20'}`}>{s} RENDER</button>
             ))}
           </div>
           <button onClick={handleSelectKey} className="px-6 py-2 bg-emerald-500/10 text-emerald-500 border border-emerald-500/20 rounded-full text-[9px] font-black hover:bg-emerald-500 hover:text-white transition-all uppercase tracking-widest">引擎管理</button>
@@ -259,7 +248,7 @@ const App: React.FC = () => {
         <div className="w-full h-full max-w-7xl rounded-[4rem] border border-white/[0.03] bg-[#050505] flex items-center justify-center overflow-hidden relative shadow-[0_0_120px_rgba(0,0,0,0.6)] group">
           {status === 'analyzing' && (
             <div className="flex flex-col items-center gap-6 animate-pulse">
-              <div className="text-emerald-500 text-[10px] font-black uppercase tracking-[1em]">DNA 审计引擎启动中...</div>
+              <div className="text-emerald-500 text-[10px] font-black uppercase tracking-[1em]">DNA 色彩锚定分析中...</div>
               <div className="w-64 h-[1px] bg-emerald-500/20"></div>
             </div>
           )}
@@ -268,16 +257,16 @@ const App: React.FC = () => {
             <div className="flex flex-col items-center gap-10">
               <div className="w-20 h-20 border-[3px] border-white/5 border-t-emerald-500 rounded-full animate-spin"></div>
               <div className="space-y-3 text-center">
-                <div className="text-white text-[11px] font-black uppercase tracking-[1em]">3% 三相投影精密渲染中</div>
-                <div className="text-white/10 text-[8px] font-bold uppercase tracking-[0.6em]">正在强制注入高级渐变退晕</div>
+                <div className="text-white text-[11px] font-black uppercase tracking-[1em]">稳定性锁已激活</div>
+                <div className="text-white/10 text-[8px] font-bold uppercase tracking-[0.6em]">正在执行零幻觉高保真渲染</div>
               </div>
             </div>
           )}
 
           {!resultImage && status === 'idle' && (
             <div className="opacity-[0.02] flex flex-col items-center gap-12 select-none pointer-events-none translate-y-12">
-              <div className="text-[20rem] font-black italic tracking-tighter leading-none">AI</div>
-              <div className="text-[14px] tracking-[4em] font-black ml-[4em]">COLOR LAYOUT AI</div>
+              <div className="text-[20rem] font-black italic tracking-tighter leading-none">COLOR</div>
+              <div className="text-[14px] tracking-[4em] font-black ml-[4em]">LAYOUT AI</div>
             </div>
           )}
 
@@ -285,7 +274,7 @@ const App: React.FC = () => {
             <div className="w-full h-full flex items-center justify-center animate-reveal bg-white">
               <img src={resultImage} className="max-w-full max-h-full object-contain" />
               <div className="absolute inset-0 bg-black/98 opacity-0 group-hover:opacity-100 transition-all duration-700 flex flex-col items-center justify-center gap-10 backdrop-blur-3xl">
-                <a href={resultImage} download="COLOR_LAYOUT_FINAL.png" className="px-24 py-6 bg-white text-black rounded-full text-[14px] font-black uppercase tracking-[1em] hover:bg-emerald-500 hover:text-white transition-all transform scale-95 group-hover:scale-100 duration-1000">导出工业级图纸</a>
+                <a href={resultImage} download="COLOR_LAYOUT_V28.png" className="px-24 py-6 bg-white text-black rounded-full text-[14px] font-black uppercase tracking-[1em] hover:bg-emerald-500 hover:text-white transition-all transform scale-95 group-hover:scale-100 duration-1000">导出高级布局图纸</a>
                 <button onClick={() => setResultImage(null)} className="text-[10px] text-white/20 hover:text-red-500 uppercase tracking-[0.8em] transition-colors font-black">销毁当前会话</button>
               </div>
             </div>
@@ -293,9 +282,9 @@ const App: React.FC = () => {
         </div>
 
         <footer className="absolute bottom-12 flex gap-32 opacity-[0.02] text-[9px] font-black uppercase tracking-[1.5em] pointer-events-none">
-          <span>Absolute Geometry Fidelity</span>
-          <span>Zero Hallucination Logic</span>
-          <span>Advanced Gradient Mapping</span>
+          <span>Stochastic Noise Suppression</span>
+          <span>Zero Hallucination Anchor</span>
+          <span>Rigid Geometry Mapping</span>
         </footer>
       </main>
 
